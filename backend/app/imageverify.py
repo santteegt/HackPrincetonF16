@@ -4,6 +4,8 @@ import urllib
 import urllib.error
 import urllib.parse
 import urllib.request
+import re
+from aylienapiclient.errors import HttpError
 
 #TODO Move all these secret keys to a single file. Maybe use a ConfigParser for this?
 MICROSOFT_CV_SUBSCRIPTION_KEY = '92e7b0d9a88a4a6495c5b40481cbe81e'
@@ -19,9 +21,13 @@ MIN_TRUST_SCORE = 70
 AYLIEN_APP_ID = "357c1a5a"
 AYLIEN_APP_KEY = "458f8b52cec9fdbfd260a52d728c9d80"
 
-IBM_WATSON_API_KEY = '899037d290dbf55145ab97ebccaae88d68b84210'
+# IBM_WATSON_API_KEY = '899037d290dbf55145ab97ebccaae88d68b84210'
+IBM_WATSON_API_KEY = 'be26dd09b33ce66dd2f360756cabf23fa36d23b9' # AIgents Lab apikey
 
-MICROSOFT_SEARCH_SUBSCRIPTION_KEY = '71b952e8431b4059b3eef47c50eead89'
+# MICROSOFT_SEARCH_SUBSCRIPTION_KEY = '71b952e8431b4059b3eef47c50eead89'
+MICROSOFT_SEARCH_SUBSCRIPTION_KEY = 'eb803c94955a4158875e63b78a3c0b2f' # AIgents Lab apikey
+
+logger = None
 
 def no_adult_content(body):
     """
@@ -114,15 +120,16 @@ def twitter_present(link):
 
     return u == 1 or return1 != 0
 
-def verified_links( url ):
+def verified_links( url, api_logger ):
     """
     Use's Web of Trust's API to detect untrustworthy web addresses.
     """
-    Check if web address
+    # Check if web address
     import requests
     mywot_api_endpoint = "http://api.mywot.com/0.4/public_link_json2"
     #add_website_here = "https://www.ncbi.nlm.nih.gov/pubmed/26389314"
-    querystring = {"hosts":"/"+ url + "/","callback":"process","key" : WOT_API_KEY}
+    # querystring = {"hosts":"/"+ url + "/","callback":"process","key" : WOT_API_KEY}
+    querystring = {"hosts": "/" + url + "/", "key": WOT_API_KEY}
     payload = ""
     headers = {
         'content-type': "application/x-www-form-urlencoded",
@@ -130,31 +137,45 @@ def verified_links( url ):
         'postman-token': "93ffde57-c70f-a775-d5ce-03f8e152e9da"
         }
     response = requests.request("GET", mywot_api_endpoint, data=payload, headers=headers, params=querystring)
-    data = response.text.replace("process","")
-    web_of_trust_score = int(data.split("[")[1].split(",")[0])
-    if web_of_trust_score > MIN_TRUST_SCORE:
+    # api_logger.debug("RESPONSE FROM WEB OF TRUST API for {0} -> {1} ".format(url,response.text))
+    # data = response.text.replace("process","")
+    # web_of_trust_score = int(data.split("[")[1].split(",")[0])
+    json = response.json()
+    key = list(filter(lambda x: bool(re.search("\w+", x)), json.keys()))[0]
+    data = json.get(key)
+    api_logger.debug("DATA FROM JSON RESPONSE WITH KEY {0}: {1}".format(key, str(data)))
+    web_of_trust_score = data.get("0")
+
+    if web_of_trust_score is not None and int(web_of_trust_score[0]) > MIN_TRUST_SCORE:
+        api_logger.debug("WOT score: {0}".format(web_of_trust_score[0]))
         return "verified"
     elif "blacklists" in data:
+        api_logger.debug("WOT score: {} BLACKLISTED!!"
+                         .format(web_of_trust_score[0] if web_of_trust_score is not None else "None"))
         return "Blacklisted"
     else:
+        api_logger.debug("WOT score: {0} LESS THAN MIN_TRUST_SCORE {1}"
+                         .format(web_of_trust_score[0] if web_of_trust_score is not None else "None", MIN_TRUST_SCORE))
         return "not verified" # TODO Why are we returning Strings and not booleans here?
 
-def summarization(url):
+def summarization(url, api_logger):
     """
     Uses Aylien's Text Summarization API to summarize the text content of the
     page at the given URL.
     Returns the summarized text as a string.
     """
+    api_logger.debug("SUMMARIZATION OF URL: {}".format(url))
     from aylienapiclient import textapi
     client = textapi.Client(AYLIEN_APP_ID, AYLIEN_APP_KEY)
 
     summary = client.Summarize({'url': url, 'sentences_number': 3})
+    api_logger.debug("RESULTS OF AyLien API -> No Sentences: {0} Raw Data: {1}".format(len(summary['sentences']), summary))
     if len(summary['sentences'])==0:
         return ""
     else:
         return " ".join(sentence for sentence in summary['sentences'] )
 
-def url_title(link):
+def url_title(link, api_logger):
     """
     Uses IBM Watson AlchemyLanguage API to extract the title of the webpage at the
     address of the link passed as argument.
@@ -168,19 +189,23 @@ def url_title(link):
     data = json.loads(alchemyres)
     return data["title"] # TODO Check whether json response is empty or not
 
-def other_links(url):
+def other_links(url, api_logger):
     """
     Uses Microsoft's Cognitive API to evaluate the quality of a webpage, and suggest
     better information if possible.
     """
-    link_verified = verified_links(url)
+    link_verified = verified_links(url, api_logger)
     if link_verified == "not verified":
-
-        st = url_title(url)
+        api_logger.debug("LINK CANNOT BE VERIFIED USING WOT")
+        st = url_title(url, api_logger)
+        st = st[0:st.find(" - ")] if st.find(" - ") else st # hack for search in ES. Delete reference to web in title
+        api_logger.debug("WATSON ALCHEMY API RETURNED: " + st)
         import http.client, urllib.request, urllib.parse, urllib.error
         headers = {
-            'Ocp-Apim-Subscription-Key': MICROSOFT_SEARCH_SUBSCRIPTION_KEY,}
-        params = urllib.parse.urlencode({'q': st, 'count': '10', 'offset': '0', 'mkt': 'en-us','safesearch': 'Moderate',})
+            'Ocp-Apim-Subscription-Key': MICROSOFT_SEARCH_SUBSCRIPTION_KEY}
+        # params = urllib.parse.urlencode({'q': st, 'count': '10', 'offset': '0', 'mkt': 'en-us','safesearch': 'Moderate'})
+        params = urllib.parse.urlencode(
+            {'q': st, 'count': '10', 'offset': '0', 'mkt': 'es-es', 'safesearch': 'Moderate'})
         try:
             conn = http.client.HTTPSConnection('api.cognitive.microsoft.com')
             conn.request("GET", "/bing/v5.0/search?%s" % params, "", headers)
@@ -188,22 +213,45 @@ def other_links(url):
             data = response.read()
             #print(data)
             data = json.loads(data.decode("utf-8"))
+            api_logger.debug("MS SEARCH RETURNED: " + str(data))
 
-            for alt_url in data['webPages']['value']:
-                if alt_url['displayUrl'] != url:
-                    urlscores = verified_links(alt_url['displayUrl'])
-                    if urlscores == "verified":
-                        alternative_summary = "Non verified. Better Verified Info is : "+summarization(alt_url['displayUrl'])
-                        return alternative_summary
+            if 'webPages' in data:
+                api_logger.debug("BING RESULTS FOUND: " + str(data.get('webPages').get('value')))
+                for alt_url in data.get('webPages').get('value'):
+                # for alt_url in data['webPages']['value']:
+                #     if alt_url.get('displayUrl') != url:
+                    bing_url = u"" + alt_url.get('url')
+                    # api_logger.debug("****==== " + bing_url)
+                    bing_url = urllib.parse.unquote(bing_url, 'utf8')
+                    bing_url = bing_url[bing_url.index("&r=") + 3:bing_url.index("&p=")]
+
+                    if url.find(bing_url) < 0:
+                        api_logger.debug("RESULT ITEM URL DIFFER FROM ORIGINAL: orig: {0} current: {1}"
+                                         .format(url, bing_url))
+                        urlscores = verified_links(bing_url, api_logger)
+                        if urlscores == "verified":
+                            alternative_summary = "Non verified. Better Verified Info is : "+summarization(bing_url, api_logger)
+                            api_logger.debug("SENDING URL SUMMARIZATION")
+                            return alternative_summary
+                    else:
+                        api_logger.debug("SAME URL HAS BEEN RETURNED")
             conn.close()
             return "no verified links"
 
+        except AttributeError as ex:
+            api_logger.debug("ATTR EXCEPTION: " + str(ex))
+        except TypeError as tex:
+            api_logger.debug("TYPE EXCEPTION: " + str(tex))
+        except HttpError as hex:
+            api_logger.debug("HTTP EXCEPTION: " + str(hex))
         except Exception as e:
-            print("[Errno {0}] {1}".format(e.errno, e.strerror))
+            api_logger.debug("EXCEPTION: " + str(e.__class__))
+            # print("[Errno {0}] {1}".format(e.errno, e.strerror))
     else:
         return link_verified
 
-def main(link):
+def main(link, api_logger=None):
+    api_logger.debug("URL TO ANALYZE: {0}".format(link))
     #link = "http://i.imgur.com/walokrp.png"
     tokens = [urllib.parse.urlparse(url) for url in ("",link)]
     count = 0
@@ -221,7 +269,7 @@ def main(link):
                 else:
                     return "Not Verified"
             else:
-                return other_links(link)
+                return other_links(link, api_logger)
 
 if __name__ == "__main__":
     print(main('https://scontent-lga3-1.xx.fbcdn.net/v/t1.0-0/p480x480/15094286_1461068273945394_240413192541301870_n.jpg?oh=2213d25515dac7200efbc93ec5abe94d&oe=58C33895'))

@@ -11,7 +11,9 @@ app.config['CORS_HEADERS'] = 'Content-Type'
 @cross_origin()
 def hello():
     user = request.args.get('content')
-    status = main(user)
+    assert app.logger is not None
+    status = main(user, app.logger)
+    app.logger.debug("RESPONSE TO GET REQUEST -> {0}".format(status))
     return status
 
 if __name__ == "__main__":
