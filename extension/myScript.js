@@ -20,12 +20,15 @@ function httpGet(input, type, data) {
 
 //	var server = "https://fbserve.herokuapp.com/";
     var server = "http://localhost:5000";
-	var contents = "?content=";
-	
-	var page;
+    server += "/crawl"
+    server += "?type=";
+	var contents = "&content=";
+
 	console.log("GET TYPE -> " + type + " RAW INPUT -> " + input)
-	if((type == "url" || type == "image") && input != undefined) {
-	    page = decode(input);
+    if(input != undefined) {
+
+	    var page = ((type == "url" || type == "image") && input != undefined) ? decode(input):input
+//	    page = decode(input);
 //	else page = input;
 
 	//page.replace("http:", "http://");
@@ -33,8 +36,9 @@ function httpGet(input, type, data) {
     //debugger;
         console.log(page);
 
-        var theUrl = server + contents + page;
-        theUrl = theUrl.replace("&", "^");
+        page = page.replace("&", "^");
+        var theUrl = server + type + contents + page;
+//        theUrl = theUrl.replace("&", "^");
 
         fetch(theUrl)
             .then(function(res)
@@ -42,7 +46,7 @@ function httpGet(input, type, data) {
             .then(function(text)
             {
                     var div = document.createElement('div'),
-                        button = Ladda.create(div);
+                    btn = Ladda.create(div);
 
                     btn.style = "front-weight:bold; padding: 3px; position:absolute; top: 4px; right: 30px;background: #3b5998; font-size: 15px;";
 
