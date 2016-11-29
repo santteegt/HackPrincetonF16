@@ -2,3 +2,5 @@ Dockerfile
 .git
 Procfile
 .venv
+.env
+data/

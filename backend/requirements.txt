@@ -13,3 +13,5 @@ Werkzeug==0.11.10
 twython==3.4.0
 google-api-python-client==1.5.5
 aylien-apiclient==0.6.0
+watson-developer-cloud==0.22.0
+pymongo==3.3.1
